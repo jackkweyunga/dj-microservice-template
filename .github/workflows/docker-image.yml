@@ -1,0 +1,175 @@
+
+name: Docker CI build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "main"
+    paths:
+      - "**.py"
+      - "**.yml"
+      - "Dockerfile"
+      - "requirements.txt"
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  IAM_URL: https://flexaccounts.skyconnect.co.tz
+
+jobs:
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+    - name: checkout
+      uses: actions/checkout@v3
+
+    - name: Set Up Python
+      uses: actions/setup-python@v2
+      with:
+          python-version: 3.11
+
+    - name: Install dependencies
+      run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+    - name: Set up environment variables
+      run: |
+        cat > .env <<EOF
+        OIDC_RP_CLIENT_ID=flex-sample-app
+        OIDC_RP_CLIENT_SECRET=XmQF8DMGQGXSCFTkDdnla3jmPbkN09PH
+        
+        OIDC_OP_AUTHORIZATION_ENDPOINT="${{ env.IAM_URL }}/realms/flex/protocol/openid-connect/auth"
+        OIDC_OP_TOKEN_ENDPOINT="${{ env.IAM_URL }}/realms/flex/protocol/openid-connect/token"
+        OIDC_OP_USER_ENDPOINT="${{ env.IAM_URL }}/realms/flex/protocol/openid-connect/userinfo"
+        OIDC_OP_END_SESSION_ENDPOINT="${{ env.IAM_URL }}/realms/flex/protocol/openid-connect/logout"
+        OIDC_OP_JWKS_ENDPOINT="${{ env.IAM_URL }}/realms/flex/protocol/openid-connect/certs"
+        GOOGLE_MAP_API_KEY ="${{env.GOOGLE_MAP_API_KEY}}"
+        MAIL_SENDER_EMAIL = "${{env.MAIL_SENDER_EMAIL}}"
+        MAIL_SENDER_PASSWORD = "${{env.MAIL_SENDER_PASSWORD}}"
+        EOF
+      
+
+    - name: Set up environment
+      run: |
+          python manage.py migrate
+
+    - name: Run tests
+      run: |
+          python manage.py test
+
+  build-publish-deploy:
+    name: build and push docker
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+
+    - name: checkout
+      uses: actions/checkout@v3
+
+    - name: Set Up Python
+      uses: actions/setup-python@v2
+      with:
+        python-version: 3.11
+
+    - name: Install dependencies
+      run: |
+          python -m pip install --upgrade pip
+          pip install --upgrade bump2version
+
+    - name: create file versioning.py
+      run: |
+        cat > versioning.py <<EOF
+        import subprocess
+        import pathlib
+        
+        BASE_DIR = pathlib.Path(__file__).parent
+        build = subprocess.check_output(["git", "describe", "--tags", "--always"], cwd=BASE_DIR).decode('utf-8').strip()
+        
+        print("Current Git Version: ", build)
+        
+        # find and update the build in config/__init__.py
+        with open(BASE_DIR / "config" / "__init__.py") as f:
+            lines = f.readlines()
+        
+            has_build = False
+            for i, line in enumerate(lines):
+                if line.startswith("__build__"):
+                    lines[i] = f'__build__ = "{build}"\n'
+                    has_build = True
+                    break
+        
+            if not has_build:
+                lines.append(f'__build__ = "{build}"\n')
+        
+        with open(BASE_DIR / "config" / "__init__.py", "w") as f:
+            f.writelines(lines)
+        
+        # get the current version
+        # from config.__init__.py
+        
+        current_version = "1.0.0"
+        
+        with open(BASE_DIR / "config" / "__init__.py") as f:
+            for line in f.readlines():
+                if line.startswith("__version__"):
+                    current_version = line.split("=")[1].strip().strip('"')
+                    break
+        
+        print("Current Version: ", current_version)
+        
+        part = "minor"
+        
+        if "feature" in build:
+            part = "minor"
+        elif "fix" in build:
+            part = "patch"
+        elif "release" in build:
+            part = "major"
+        
+        subprocess.call(["bump2version", "--current-version", current_version, "--allow-dirty", part, "config/__init__.py"],
+                        cwd=BASE_DIR)
+
+        EOF
+
+    - name: run versioning.py
+      run: |
+          python versioning.py
+
+    - name: Set up Docker Builds
+      uses: docker/setup-buildx-action@v2
+
+    - name: Login to Container registry
+      uses: docker/login-action@v2
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Extract metadata (tags, labels) for Docker
+      id: meta
+      uses: docker/metadata-action@69f6fc9d46f2f8bf0d5491e4aabe0bb8c6a4678a
+      with:
+        images: |
+          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=tag
+          type=ref,event=pr
+          type=sha
+        flavor: |
+          latest=auto
+          prefix=
+          suffix=
+    - name: Build and push hash tagged image
+      uses: docker/build-push-action@v2
+      with:
+        context: .
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+        cache-to: type=inline
