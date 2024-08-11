@@ -49,20 +49,16 @@ CELERY_BROKER_URL = config("REDIS_URL", default="redis://localhost:6379/0")  # o
 CELERY_RESULT_BACKEND = config("REDIS_URL", default="redis://localhost:6379/0")
 
 CELERY_BEAT_SCHEDULE = {
-    'check-bidding-status-every-3-minutes': {
-        'task': 'cargo.tasks.check_bidding_status',
-        'schedule': crontab(minute='*/3'),
-    },
+    # 'example-task': {
+    #     'task': 'myapp.tasks.activity',
+    #     'schedule': crontab(minute='*/3'), # every 3 minites
+    # },
 }
+
 redis_url = config("REDIS_URL", default="redis://localhost:6379/0")
 REDIS_HOST = str(redis_url).replace("redis://", "").split(":")[0]
 REDIS_PORT = int(str(redis_url).replace("redis://", "").split(":")[1].split("/")[0])
 REDIS_DB = int(str(redis_url).replace("redis://", "").split(":")[1].split("/")[1])
-
-
-# Application definition
-
-
 
 INSTALLED_APPS = [
     'daphne',
@@ -94,8 +90,7 @@ MIDDLEWARE = [
     # .......................
     'mozilla_django_oidc.middleware.SessionRefresh',
     # .......................
-    #registration middleware
-    'cargo.middleware.RegistrationMiddleware',
+    #registration middlewares
 
 ]
 
@@ -120,6 +115,8 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'config.wsgi.application'
 ASGI_APPLICATION = 'config.asgi.application'
+
+
 # Database
 # https://docs.djangoproject.com/en/5.0/ref/settings/#databases
 
@@ -128,7 +125,7 @@ if config("DATABASE_URL", default=None) is not None:
         DATABASES = {
             "default": config(
                 "DATABASE_URL",
-                default="postgresql://postgres:postgres@localhost:5432/flex-app-template",
+                default="postgresql://postgres:postgres@localhost:5432/default",
                 cast=db_url,
             )
         }
@@ -185,6 +182,7 @@ STATIC_ROOT = "staticfiles/"
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media/')
 
+# TODO: Add another storage e.g AWS
 if MEDIA_STORAGE == "cloudinary":
     import cloudinary
     import cloudinary.uploader
